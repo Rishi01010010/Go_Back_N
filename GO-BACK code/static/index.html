@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go-Back-N ARQ Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+
+        h1 {
+            background-color: #007bff;
+            color: white;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .controls {
+            margin: 20px 0;
+        }
+
+        .controls input, .controls button {
+            padding: 10px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        .container {
+            display: flex;
+            justify-content: space-between;
+            margin: 20px;
+        }
+
+        .system {
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            padding: 20px;
+            width: 45%;
+            background-color: #f8f9fa;
+        }
+
+        svg {
+            width: 100%;
+            height: 300px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+
+        .log {
+            height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background-color: #fff;
+            border-radius: 5px;
+        }
+
+        .packet {
+            fill: #007bff;
+            stroke: #0056b3;
+        }
+
+        .packet.lost {
+            fill: red;
+        }
+
+        .ack {
+            fill: green;
+        }
+
+        .tooltip {
+            position: absolute;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 5px;
+            pointer-events: none;
+            font-size: 12px;
+            box-shadow: 0px 0px 5px rgba(0, 0, 0, 0.2);
+        }
+        .statistics {
+            margin: 20px auto;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            max-width: 600px;
+        }
+
+        .statistics h2 {
+            color: #007bff;
+            margin-bottom: 15px;
+        }
+
+        .stat-item {
+            display: inline-block;
+            margin: 10px 20px;
+            padding: 10px;
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            min-width: 150px;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Go-Back-N ARQ Visualization</h1>
+    <div class="controls">
+        <label for="message">Message:</label>
+        <input type="text" id="message" placeholder="Enter message">
+        <label for="window-size">Window Size:</label>
+        <input type="number" id="window-size" min="1" placeholder="Enter window size">
+        <button onclick="startSimulation()">Start Simulation</button>
+    </div>
+    <div class="container">
+        <div class="system">
+            <h2>Sender</h2>
+            <svg id="sender"></svg>
+            <div class="log" id="sender-log"></div>
+        </div>
+        <div class="system">
+            <h2>Receiver</h2>
+            <svg id="receiver"></svg>
+            <div class="log" id="receiver-log"></div>
+        </div>
+    </div>
+
+    <!-- New Statistics Section -->
+    <div class="statistics" id="statistics" style="display: none;">
+        <h2>Transmission Statistics</h2>
+        <div class="stat-item">
+            <div class="stat-value" id="packets-sent">0</div>
+            <div class="stat-label">Packets Transmitted</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value" id="packets-lost">0</div>
+            <div class="stat-label">Packets Lost</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value" id="retransmissions">0</div>
+            <div class="stat-label">Retransmissions</div>
+        </div>
+    </div>
+
+    <div class="tooltip" id="tooltip" style="display: none;"></div>
+
+    <script>
+        const packetWidth = 40;
+        const packetHeight = 20;
+        let statistics = {
+            packetsSent: 0,
+            packetsLost: 0,
+            retransmissions: 0
+        };
+    
+        function updateStatistics() {
+            document.getElementById('packets-sent').textContent = statistics.packetsSent;
+            document.getElementById('packets-lost').textContent = statistics.packetsLost;
+            document.getElementById('retransmissions').textContent = statistics.retransmissions;
+            document.getElementById('statistics').style.display = 'block';
+        }
+    
+        function startSimulation() {
+            const message = document.getElementById('message').value;
+            const windowSize = parseInt(document.getElementById('window-size').value);
+    
+            if (!message || windowSize < 1) {
+                alert('Please provide a valid message and window size.');
+                return;
+            }
+    
+            // Reset statistics
+            statistics = {
+                packetsSent: 0,
+                packetsLost: 0,
+                retransmissions: 0
+            };
+            
+            const senderSvg = d3.select("#sender");
+            const receiverSvg = d3.select("#receiver");
+            const senderLog = document.getElementById("sender-log");
+            const receiverLog = document.getElementById("receiver-log");
+            const tooltip = document.getElementById("tooltip");
+    
+            senderLog.innerHTML = "";
+            receiverLog.innerHTML = "";
+    
+            senderSvg.selectAll("*").remove();
+            receiverSvg.selectAll("*").remove();
+    
+            const totalPackets = message.length;
+            let base = 0;
+            let nextSeqNum = 0;
+            let timeout = null;
+    
+            const simulateLoss = () => Math.random() < 0.2;
+            
+            function startTimer() {
+                if (timeout) clearTimeout(timeout);
+                timeout = setTimeout(() => {
+                    senderLog.innerHTML += `<p style="color: orange;">Timeout occurred - Resending window</p>`;
+                    statistics.retransmissions++;
+                    nextSeqNum = base;
+                    sendWindow();
+                    updateStatistics();
+                }, 3000);
+            }
+    
+            function stopTimer() {
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = null;
+                }
+            }
+    
+            function createReceiverPacket(packetIndex, data) {
+                const packetGroup = receiverSvg.append("g")
+                    .attr("class", "packet-group")
+                    .attr("id", `receiver-packet-${packetIndex}`);
+    
+                const packet = packetGroup.append("rect")
+                    .attr("x", packetIndex * (packetWidth + 10))
+                    .attr("y", 50)
+                    .attr("width", packetWidth)
+                    .attr("height", packetHeight)
+                    .attr("class", "ack");
+    
+                packetGroup.append("text")
+                    .attr("x", packetIndex * (packetWidth + 10) + packetWidth / 2)
+                    .attr("y", 65)
+                    .attr("text-anchor", "middle")
+                    .attr("font-size", "12px")
+                    .attr("fill", "white")
+                    .text(data);
+            }
+    
+            function sendPacket(packetIndex) {
+                statistics.packetsSent++;
+                updateStatistics();
+                
+                const packetGroup = senderSvg.append("g")
+                    .attr("class", "packet-group")
+                    .attr("id", `packet-${packetIndex}`);
+    
+                const packet = packetGroup.append("rect")
+                    .attr("x", packetIndex * (packetWidth + 10))
+                    .attr("y", 50)
+                    .attr("width", packetWidth)
+                    .attr("height", packetHeight)
+                    .attr("class", "packet");
+    
+                const text = packetGroup.append("text")
+                    .attr("x", packetIndex * (packetWidth + 10) + packetWidth / 2)
+                    .attr("y", 65)
+                    .attr("text-anchor", "middle")
+                    .attr("font-size", "12px")
+                    .attr("fill", "white")
+                    .text(message[packetIndex]);
+    
+                if (packetIndex === base) {
+                    startTimer();
+                }
+    
+                packet.transition()
+                    .duration(2000)
+                    .attr("y", 200)
+                    .on("end", function () {
+                        if (simulateLoss()) {
+                            statistics.packetsLost++;
+                            updateStatistics();
+                            senderLog.innerHTML += `<p style="color: red;">Packet ${packetIndex} lost!</p>`;
+                            packet.classed("lost", true);
+                        } else {
+                            senderLog.innerHTML += `<p style="color: blue;">Packet ${packetIndex} sent successfully.</p>`;
+                            receiverLog.innerHTML += `<p style="color: green;">Received packet ${packetIndex}: ${message[packetIndex]}</p>`;
+                            createReceiverPacket(packetIndex, message[packetIndex]);
+    
+                            if (packetIndex === base) {
+                                base++;
+                                if (base === nextSeqNum) {
+                                    stopTimer();
+                                } else {
+                                    startTimer();
+                                }
+                                sendWindow();
+                            }
+                        }
+                    });
+            }
+    
+            function sendWindow() {
+                while (nextSeqNum < base + windowSize && nextSeqNum < totalPackets) {
+                    sendPacket(nextSeqNum);
+                    nextSeqNum++;
+                }
+            }
+    
+            // Start the simulation
+            sendWindow();
+        }
+    </script>
+</body>
+</html>
